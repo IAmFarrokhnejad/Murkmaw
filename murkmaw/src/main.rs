@@ -1,8 +1,86 @@
 use std::process;
+use anyhow::{anyhow, Ok, Result};
+use html_parser::{Dom, Element, Node};
 
-use anyhow::Result;
 
 
+
+
+fn is_node(node: &Node) -> bool
+{
+    match node {
+        Node::Element(..) => true,
+        _ => false
+        
+    }
+}
+
+
+fn is_text(node: &Node) -> bool
+{
+    match node {
+        Node::Text(_)=>true,
+        _ =>false
+        
+    }
+}
+
+
+
+fn crawl_element(elem: Element) -> Result<Vec<String>>
+{
+    if elem.name =="a"
+    {
+        let text = elem.children.iter().filter(|c| is_text(c)).last().map(|n| n.text()).ok_or_else(|| anyhow!("Failed to fetch text!")); //PROCEED HERE (THIS LINE NEEDS FIXING)
+    }
+    let link_elements = elem.children.iter().filter(|c| is_node(c));
+    for Child in elem.children
+    {
+        match Child 
+        {
+
+            Node::Element(elem)=>{
+                log::info!("Element found!: {} ", elem.name);
+            },
+            _ =>{},
+
+        }
+    }
+
+    Ok(Vec::new())
+}
+
+async fn crawl_url(url: &str) -> Result<Vec<String>> 
+{
+    let html = reqwest::get(url)
+    .await?
+    .text()
+    .await;
+
+    let dom = Dom::parse(&html);
+
+    for Child in dom.children
+    {
+        match Child 
+        {
+            Node::Text(text)=>{
+                log::info!("Node found!: {} ", text);
+            },
+            Node::Element(elem)=>{
+                log::info!("Element found!: {} ", elem.name);
+            },
+            Node::Comment(comment)=>{
+                log::info!("omment found!: {} ", comment);
+            }
+
+        }
+    }
+
+
+
+    let res: Vec<String> = Vec::new();
+    Ok(res)
+}
 
 
 
@@ -10,10 +88,7 @@ use anyhow::Result;
 async fn try_main() -> Result<()> 
 {
 
-
-    let resp = reqwest::get("https://google.com")
-    .await?;
-
+    let _ = crawl_url("https://google.com").await?;
 
     println!("{:?}", resp.text().await);
 
