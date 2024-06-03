@@ -1,4 +1,4 @@
-use std::process;
+use std::process::{self, Child};
 use anyhow::{anyhow, Ok, Result};
 use html_parser::{Dom, Element, Node};
 
@@ -26,32 +26,45 @@ fn is_text(node: &Node) -> bool
 }
 
 
+fn crawl_element(elem: Element) -> Result<Vec<String>> {
 
-fn crawl_element(elem: Element) -> Result<Vec<String>>
-{
-    if elem.name =="a"
-    {
-        let text = elem.children.iter().filter(|c| is_text(c)).last().map(|n| n.text()).ok_or_else(|| anyhow!("Failed to fetch text!")); //PROCEED HERE (THIS LINE NEEDS FIXING)
+
+    let mut links: Vec<String> = Vec::new();
+
+    if elem.name == "a" {
+        let text = elem.children.iter()
+            .filter(|c| is_text(c))
+            .last()
+            .map(|n| n.text())
+            .ok_or_else(|| anyhow!("Failed to fetch the text!"))?
+            .text()
+            .ok_or_else(|| anyhow!("Failed to fetch the value!"))?;
+
+        links.push(text.to_string());
     }
-    let link_elements = elem.children.iter().filter(|c| is_node(c));
-    for Child in elem.children
+
+
+    for nodes in elem.children.iter().filter(|c| is_node(c))
     {
-        match Child 
-        {
 
-            Node::Element(elem)=>{
-                log::info!("Element found!: {} ", elem.name);
+        match node {
+            Node::Element(elem) =>
+            {
+                //add any link from this element to our vector
+                let mut children_links = crawl_element(elem.clone())?;
+                links.append(&mut children_links);
             },
-            _ =>{},
-
+            _=>{}
         }
     }
 
-    Ok(Vec::new())
+    Ok(links)
 }
 
 async fn crawl_url(url: &str) -> Result<Vec<String>> 
 {
+
+    //Pare HTML into a DOM object
     let html = reqwest::get(url)
     .await?
     .text()
@@ -59,26 +72,23 @@ async fn crawl_url(url: &str) -> Result<Vec<String>>
 
     let dom = Dom::parse(&html);
 
+
+    //Crawls all the nodes in main html
     for Child in dom.children
     {
-        match Child 
-        {
-            Node::Text(text)=>{
-                log::info!("Node found!: {} ", text);
+        match child {
+            Node::Element(elem) =>{
+                log::info!("Links found for element {}: {:?}", elem.name, crawl_element(elem));
             },
-            Node::Element(elem)=>{
-                log::info!("Element found!: {} ", elem.name);
-            },
-            Node::Comment(comment)=>{
-                log::info!("omment found!: {} ", comment);
-            }
-
+            _ => {}
         }
+
+       log::info!("Links found for element {}: {:?}", Child.element().map_or("undefined", |n| &n.name) , {crawl_element(Child)});
     }
 
 
-
-    let res: Vec<String> = Vec::new();
+    //Change This later!!                         
+    let res: Vec<String> = Vec::new();                         //PROCEED HERE!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
     Ok(res)
 }
 
