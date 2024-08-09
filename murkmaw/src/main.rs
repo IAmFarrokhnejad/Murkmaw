@@ -4,6 +4,19 @@ use html_parser::{Dom, Element, Node};
 
 
 
+//Turns URLs into full URLs
+fn get_url(url: &str, root_url: &str) -> String {
+    
+
+    log::info!("Comparing {} and {}", url, root_url);
+    if url.starts_with("https:") || url.starts_with("http:") {
+        return url.into();
+    }
+
+    log::info!("Formatting string ")
+
+    format!("{}/{}", root_url.strip_suffix('/').unwrap_or(root_url), url.strip_prefix('/').unwrap_or(url)); 
+}
 
 
 fn is_node(node: &Node) -> bool
@@ -16,42 +29,39 @@ fn is_node(node: &Node) -> bool
 }
 
 
-fn is_text(node: &Node) -> bool
-{
-    match node {
-        Node::Text(_)=>true,
-        _ =>false
-        
-    }
-}
 
 
-fn crawl_element(elem: Element) -> Result<Vec<String>> {
+fn crawl_element(elem: Element, root_url: &str) -> Result<Vec<String>> {
 
 
     let mut links: Vec<String> = Vec::new();
 
     if elem.name == "a" {
-        let text = elem.children.iter()
-            .filter(|c| is_text(c))
-            .last()
-            .map(|n| n.text())
-            .ok_or_else(|| anyhow!("Failed to fetch the text!"))?
-            .text()
-            .ok_or_else(|| anyhow!("Failed to fetch the value!"))?;
+        let href_attrib = elem.attributes
+        .iter()
+        .filter(|(name, _)| name.as_str() == "href")
+        .last()
+        .ok_or_else(|| anyhow!("No href found in a tag"));
 
-        links.push(text.to_string());
+    match href_attrib {
+        ok((_key, Some(val))) => {
+            links.push(get_url(val.into(), &root_url));
+        },
+        _ => {
+            log::error!("No link found for the element:", elem.name);
+        }
+    }
+        }
     }
 
 
     for nodes in elem.children.iter().filter(|c| is_node(c))
     {
-
         match node {
             Node::Element(elem) =>
             {
                 //add any link from this element to our vector
-                let mut children_links = crawl_element(elem.clone())?;
+                let mut children_links = crawl_element(elem.clone(), root_url)?;
                 links.append(&mut children_links);
             },
             _=>{}
@@ -62,7 +72,7 @@ fn crawl_element(elem: Element) -> Result<Vec<String>> {
 }
 
 async fn crawl_url(url: &str) -> Result<Vec<String>> 
-{
+{   
 
     //Pare HTML into a DOM object
     let html = reqwest::get(url)
@@ -78,7 +88,11 @@ async fn crawl_url(url: &str) -> Result<Vec<String>>
     {
         match child {
             Node::Element(elem) =>{
-                log::info!("Links found for element {}: {:?}", elem.name, crawl_element(elem));
+
+                for link in crawl_element(elem, url)? {
+                    log::info!("Link found in {}: {:?}", url, link);
+                }
+          
             },
             _ => {}
         }
@@ -88,7 +102,7 @@ async fn crawl_url(url: &str) -> Result<Vec<String>>
 
 
     //Change This later!!                         
-    let res: Vec<String> = Vec::new();                         //PROCEED HERE!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    let res: Vec<String> = Vec::new();
     Ok(res)
 }
 
@@ -100,7 +114,9 @@ async fn try_main() -> Result<()>
 
     let _ = crawl_url("https://google.com").await?;
 
-    println!("{:?}", resp.text().await);
+    // for url in urls {
+    //     crawl_url(url);        
+    // }
 
 
     Ok(())
