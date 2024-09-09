@@ -1,7 +1,7 @@
 use std::process::{self, Child};
 use anyhow::{anyhow, Ok, Result};
 use html_parser::{Dom, Element, Node};
-
+//Author: Morteza Farrokhnejad
 
 
 //Turns URLs into full URLs
