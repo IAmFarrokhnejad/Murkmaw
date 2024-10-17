@@ -1,6 +1,26 @@
 use std::process::{self, Child};
 use anyhow::{anyhow, Ok, Result};
+use clap::Parser;
 use html_parser::{Dom, Element, Node};
+
+
+/// Simple program to greet a person
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct programArgs {
+    /// Name of the person to greet
+    #[arg(short, long)]
+    starting_url: String,
+}
+
+fn main() {
+    let args = Args::parse();
+
+    for _ in 0..args.count {
+        println!("Hello {}!", args.name);
+    }
+}
+
 //Author: Morteza Farrokhnejad
 
 
@@ -13,7 +33,7 @@ fn get_url(url: &str, root_url: &str) -> String {
         return url.into();
     }
 
-    log::info!("Formatting string ")
+    log::info!("Formatting string ");
 
     format!("{}/{}", root_url.strip_suffix('/').unwrap_or(root_url), url.strip_prefix('/').unwrap_or(url)); 
 }
@@ -31,42 +51,30 @@ fn is_node(node: &Node) -> bool
 
 
 
-fn crawl_element(elem: Element, root_url: &str) -> Result<Vec<String>> {
+fn crawl_element(elem: &Element, root_url: &str) -> Result<Vec<String>> 
+{
 
 
     let mut links: Vec<String> = Vec::new();
 
-    if elem.name == "a" {
-        let href_attrib = elem.attributes
-        .iter()
-        .filter(|(name, _)| name.as_str() == "href")
-        .last()
-        .ok_or_else(|| anyhow!("No href found in a tag"));
-
-    match href_attrib {
-        ok((_key, Some(val))) => {
-            links.push(get_url(val.into(), &root_url));
-        },
-        _ => {
-            log::error!("No link found for the element:", elem.name);
-        }
-    }
-        }
-    }
-
-
-    for nodes in elem.children.iter().filter(|c| is_node(c))
+    if elem.name == "a" 
     {
+        let href_attrib = elem.attributes().get("href").ok_or_else(||anyhow!("Failed to find href from the link!"))?.as_ref().ok_or_else(||"Href does not have a value!")?.clone();
+
+        links.push(get_url(&href_attrib, root_url));
+    }
+
+
+    for node in elem.children().iter().filter(|c| is_node(c)) {
         match node {
-            Node::Element(elem) =>
-            {
-                //add any link from this element to our vector
-                let mut children_links = crawl_element(elem.clone(), root_url)?;
+            Node::Element(elem) => {
+                let mut children_links = crawl_element(elem, root_url);
                 links.append(&mut children_links);
             },
-            _=>{}
+            _ =>{}
         }
     }
+    
 
     Ok(links)
 }
@@ -109,10 +117,10 @@ async fn crawl_url(url: &str) -> Result<Vec<String>>
 
 
 
-async fn try_main() -> Result<()> 
+async fn try_main(args: programArgs) -> Result<()> 
 {
 
-    let _ = crawl_url("https://google.com").await?;
+    let _ = crawl_url(&args.starting_url).await?;
 
     // for url in urls {
     //     crawl_url(url);        
@@ -128,7 +136,9 @@ async fn main()
 {
     env_logger::init();
 
-    match try_main().await
+    let args = programArgs::parse();
+
+    match try_main(args).await
     {
         Ok(_) => {
             log::info!("Done!");
