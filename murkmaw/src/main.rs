@@ -1,4 +1,4 @@
-use std::process::{self, Child};
+use std::{collections::{vec_deque, HashSet, VecDeque}, process::{self, Child}};
 use anyhow::{anyhow, Ok, Result};
 use clap::Parser;
 use html_parser::{Dom, Element, Node};
@@ -48,9 +48,6 @@ fn is_node(node: &Node) -> bool
     }
 }
 
-
-
-
 fn crawl_element(elem: &Element, root_url: &str) -> Result<Vec<String>> 
 {
 
@@ -74,21 +71,21 @@ fn crawl_element(elem: &Element, root_url: &str) -> Result<Vec<String>>
             _ =>{}
         }
     }
-    
 
     Ok(links)
 }
 
-async fn crawl_url(url: &str) -> Result<Vec<String>> 
+async fn crawl_url(url: String) -> Result<Vec<String>> 
 {   
 
     //Pare HTML into a DOM object
-    let html = reqwest::get(url)
+    let html = reqwest::get(url.clone())
     .await?
     .text()
     .await;
 
     let dom = Dom::parse(&html);
+    let mut res: Vec<String> = Vec::new();
 
 
     //Crawls all the nodes in main html
@@ -97,7 +94,8 @@ async fn crawl_url(url: &str) -> Result<Vec<String>>
         match child {
             Node::Element(elem) =>{
 
-                for link in crawl_element(elem, url)? {
+                for link in crawl_element(elem, url.as_str())? {
+                    res.push(link.clone());
                     log::info!("Link found in {}: {:?}", url, link);
                 }
           
@@ -107,10 +105,8 @@ async fn crawl_url(url: &str) -> Result<Vec<String>>
 
        log::info!("Links found for element {}: {:?}", Child.element().map_or("undefined", |n| &n.name) , {crawl_element(Child)});
     }
-
-
     //Change This later!!                         
-    let res: Vec<String> = Vec::new();
+
     Ok(res)
 }
 
@@ -120,13 +116,38 @@ async fn crawl_url(url: &str) -> Result<Vec<String>>
 async fn try_main(args: programArgs) -> Result<()> 
 {
 
-    let _ = crawl_url(&args.starting_url).await?;
+    let max_links = 1000;
 
-    // for url in urls {
-    //     crawl_url(url);        
-    // }
+    //Already visited links
+    let mut already_visited: HashSet<String> = HashSet::new();
+
+    let mut link_queue = VecDeque<String> VecDeque::with_capacity(max_links);
+    link_queue.push_back(args.starting_url);
 
 
+    'crawler: loop {
+        if link_queue.is_empty() || (already_visited.len() > max_links) {
+            break 'crawler;
+        }
+
+        let url = link_queue.pop_back().ok_or_else(|| anyhow!("Queue is empty!"))?;
+        let links = crawl_url(url.clone()).await?;
+
+
+        for link in links {
+            if already_visited.contains(&link) {
+                link_queue.push_back(link);
+            }
+
+        }
+
+        //Store all the visited links
+        
+        already_visited.insert(url);
+
+    }
+
+    println!("{:?}", already_visited);
     Ok(())
 }
 
@@ -146,10 +167,6 @@ async fn main()
         Err(e) =>{
             log::error!("An error occured: {:?}", e);
             process::exit(-1);
-        }
-        
+        }     
     }
-
-
-
 }
