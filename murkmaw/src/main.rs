@@ -1,5 +1,5 @@
-use std::{collections::{vec_deque, HashSet, VecDeque}, process::{self, Child}};
-use anyhow::{anyhow, Ok, Result};
+use std::{process, collections::{VecDeque, HashSet}};
+use anyhow::{anyhow, Result, bail};
 use clap::Parser;
 use html_parser::{Dom, Element, Node};
 
@@ -25,17 +25,19 @@ fn main() {
 
 
 //Turns URLs into full URLs
-fn get_url(url: &str, root_url: &str) -> String {
+fn get_url(path: &str, root_url: Url) -> Result <Url> {
+
+    match Url::parse(&path) {
+        Ok(url) => Ok(url),
+        _ => {
+            match root_url.join(path) {
+                Ok(url) => Ok(url),
+                _ => bail!("Failed to join the relative path!")
+            }
+        }
+    },
     
 
-    log::info!("Comparing {} and {}", url, root_url);
-    if url.starts_with("https:") || url.starts_with("http:") {
-        return url.into();
-    }
-
-    log::info!("Formatting string ");
-
-    format!("{}/{}", root_url.strip_suffix('/').unwrap_or(root_url), url.strip_prefix('/').unwrap_or(url)); 
 }
 
 
@@ -48,7 +50,7 @@ fn is_node(node: &Node) -> bool
     }
 }
 
-fn crawl_element(elem: &Element, root_url: &str) -> Result<Vec<String>> 
+fn crawl_element(elem: &Element, root_url: Url) -> Result<Vec<String>> 
 {
 
 
@@ -58,14 +60,14 @@ fn crawl_element(elem: &Element, root_url: &str) -> Result<Vec<String>>
     {
         let href_attrib = elem.attributes().get("href").ok_or_else(||anyhow!("Failed to find href from the link!"))?.as_ref().ok_or_else(||"Href does not have a value!")?.clone();
 
-        links.push(get_url(&href_attrib, root_url));
+        links.push(get_url(&href_attrib, root_url.clone())?.to_string());
     }
 
 
     for node in elem.children().iter().filter(|c| is_node(c)) {
         match node {
             Node::Element(elem) => {
-                let mut children_links = crawl_element(elem, root_url);
+                let mut children_links = crawl_element(elem, root_url.clone());
                 links.append(&mut children_links);
             },
             _ =>{}
@@ -77,6 +79,8 @@ fn crawl_element(elem: &Element, root_url: &str) -> Result<Vec<String>>
 
 async fn crawl_url(url: String) -> Result<Vec<String>> 
 {   
+
+    url 
 
     //Pare HTML into a DOM object
     let html = reqwest::get(url.clone())
@@ -93,8 +97,14 @@ async fn crawl_url(url: String) -> Result<Vec<String>>
     {
         match child {
             Node::Element(elem) =>{
-
-                for link in crawl_element(elem, url.as_str())? {
+                let links = match crawl_element(&elem, url.clone()) {
+                    Ok(links) => links,
+                    Err(e) => {
+                        log::error!("Error: {}", e);
+                         Vec::new() 
+                    }
+                }
+                for link in links {
                     res.push(link.clone());
                     log::info!("Link found in {}: {:?}", url, link);
                 }
@@ -111,8 +121,6 @@ async fn crawl_url(url: String) -> Result<Vec<String>>
 }
 
 
-
-
 async fn try_main(args: programArgs) -> Result<()> 
 {
 
@@ -120,6 +128,8 @@ async fn try_main(args: programArgs) -> Result<()>
 
     //Already visited links
     let mut already_visited: HashSet<String> = HashSet::new();
+
+
 
     let mut link_queue = VecDeque<String> VecDeque::with_capacity(max_links);
     link_queue.push_back(args.starting_url);
@@ -130,7 +140,8 @@ async fn try_main(args: programArgs) -> Result<()>
             break 'crawler;
         }
 
-        let url = link_queue.pop_back().ok_or_else(|| anyhow!("Queue is empty!"))?;
+        let url_str = link_queue.pop_back().ok_or_else(|| anyhow!("Queue is empty!"))?;
+        let url = Url::parse(&url_str)?;
         let links = crawl_url(url.clone()).await?;
 
 
@@ -143,7 +154,7 @@ async fn try_main(args: programArgs) -> Result<()>
 
         //Store all the visited links
         
-        already_visited.insert(url);
+        already_visited.insert(url_str);
 
     }
 
