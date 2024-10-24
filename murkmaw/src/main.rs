@@ -1,7 +1,8 @@
-use std::{process, collections::{VecDeque, HashSet}};
+use std::{any, collections::{HashSet, VecDeque}, process, sync::{Arc, RwLock}};
 use anyhow::{anyhow, Result, bail};
 use clap::Parser;
 use html_parser::{Dom, Element, Node};
+use tokio::sync::RwLock;
 
 
 /// Simple program to greet a person
@@ -13,6 +14,14 @@ struct programArgs {
     starting_url: String,
 }
 
+struct crawlerState {
+    link_queue: RwLock<VecDeque<String>>,
+    already_visited: RwLock<HashSet<String>>,
+    max_links: u32,
+}
+
+type crawlerStateRef = Arc<crawlerState>;
+
 fn main() {
     let args = Args::parse();
 
@@ -23,9 +32,14 @@ fn main() {
 
 //Author: Morteza Farrokhnejad
 
-
 //Turns URLs into full URLs
 fn get_url(path: &str, root_url: Url) -> Result <Url> {
+
+    if Ok(url) = Url::parse(&path) {
+        return Ok(url);
+    }
+
+    root_url.join(&path).ok().ok_or(anyhow!("Failed to join the relative path!"))
 
     match Url::parse(&path) {
         Ok(url) => Ok(url),
@@ -39,7 +53,6 @@ fn get_url(path: &str, root_url: Url) -> Result <Url> {
     
 
 }
-
 
 fn is_node(node: &Node) -> bool
 {
@@ -77,10 +90,9 @@ fn crawl_element(elem: &Element, root_url: Url) -> Result<Vec<String>>
     Ok(links)
 }
 
-async fn crawl_url(url: String) -> Result<Vec<String>> 
+async fn find_links(url: String) -> Result<Vec<String>> 
 {   
 
-    url 
 
     //Pare HTML into a DOM object
     let html = reqwest::get(url.clone())
@@ -120,30 +132,26 @@ async fn crawl_url(url: String) -> Result<Vec<String>>
     Ok(res)
 }
 
-
-async fn try_main(args: programArgs) -> Result<()> 
-{
-
-    let max_links = 1000;
-
-    //Already visited links
-    let mut already_visited: HashSet<String> = HashSet::new();
-
-
-
-    let mut link_queue = VecDeque<String> VecDeque::with_capacity(max_links);
-    link_queue.push_back(args.starting_url);
-
-
+async fn crawl(crawler_state: crawlerStateRef) -> Result<()> {
+    
     'crawler: loop {
-        if link_queue.is_empty() || (already_visited.len() > max_links) {
+
+        let mut link_queue = crawler_state.link_queue.write().await;
+        let already_visited = crawler_state.already_visited.read().await;
+
+        if link_queue.is_empty() || (already_visited.len() > crawler_state.max_links) {
             break 'crawler;
         }
+        drop(already_visited);
 
         let url_str = link_queue.pop_back().ok_or_else(|| anyhow!("Queue is empty!"))?;
-        let url = Url::parse(&url_str)?;
-        let links = crawl_url(url.clone()).await?;
+        drop(link_queue);
 
+        let url = Url::parse(&url_str)?;
+        let links = find_links(url.clone()).await?;
+
+        let mut link_queue = crawler_state.link_queue.write().await;
+        let mut already_visited = crawler_state.already_visited.write().await;
 
         for link in links {
             if already_visited.contains(&link) {
@@ -156,8 +164,27 @@ async fn try_main(args: programArgs) -> Result<()>
         
         already_visited.insert(url_str);
 
+        Ok(())
+
     }
 
+    println!("{:?}", already_visited);
+    Ok(())
+}
+
+async fn try_main(args: programArgs) -> Result<()> 
+{
+    let mut crawler_state = crawlerState {
+        link_queue: RwLock::new(VecDeque::from([args.starting_url])),
+        already_visited: RwLock::new(Default::default()),
+        max_links: 1000,
+    };
+
+    let crawler_state = Arc::new(crawlerState);
+
+    crawl(crawler_state.clone()).await?;
+
+    let already_visited = crawler_state.already_visited.read().await?;
     println!("{:?}", already_visited);
     Ok(())
 }
