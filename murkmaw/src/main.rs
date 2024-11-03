@@ -3,6 +3,9 @@ use anyhow::{anyhow, Result, bail};
 use clap::Parser;
 use html_parser::{Dom, Element, Node};
 use tokio::sync::RwLock;
+use futures::{stream::FutureUnordered, Future, StreamExt};
+use url::Url;
+use html_parser::{Dom, Node, Element};
 
 
 /// Simple program to greet a person
@@ -132,14 +135,20 @@ async fn find_links(url: String) -> Result<Vec<String>>
     Ok(res)
 }
 
-async fn crawl(crawler_state: crawlerStateRef) -> Result<()> {
+async fn crawl(crawler_state: crawlerStateRef, worker_n: i32) -> Result<()> {
     
     'crawler: loop {
 
         let mut link_queue = crawler_state.link_queue.write().await;
         let already_visited = crawler_state.already_visited.read().await;
 
-        if link_queue.is_empty() || (already_visited.len() > crawler_state.max_links) {
+        if link_queue.is_empty() {
+            log::info!("Waiting for the next link from {}", worker_n)
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            continue;
+        }
+
+        if (already_visited.len() > crawler_state.max_links) {
             break 'crawler;
         }
         drop(already_visited);
@@ -172,6 +181,18 @@ async fn crawl(crawler_state: crawlerStateRef) -> Result<()> {
     Ok(())
 }
 
+async fn output_status(crawlerState: crawlerStateRef) -> Result<()> {
+    loop {
+        let already_visited = crawler_state.already_visited.read().await;
+
+        for link in already_visited.iter() {
+            log::info!("Already Visited: {}", link);
+        }
+    }
+
+    Ok(())
+}
+
 async fn try_main(args: programArgs) -> Result<()> 
 {
     let mut crawler_state = crawlerState {
@@ -182,7 +203,25 @@ async fn try_main(args: programArgs) -> Result<()>
 
     let crawler_state = Arc::new(crawlerState);
 
+
+    let mut tasks = FutureUnordered::<Pin<Box<dyn Future<Output = Result<()>>>>>::new();
+    tasks.push(crawl(Box::pin(crawler_state.clone(), 1)));
+    tasks.push(crawl(Box::pin(crawler_state.clone(), 2)));
+    tasks.push(crawl(Box::pin(crawler_state.clone(), 3)));
+    tasks.push(crawl(Box::pin(crawler_state.clone(), 4)));
+    tasks.push(crawl(Box::pin(crawler_state.clone())));
+
     crawl(crawler_state.clone()).await?;
+
+    while let Some(result) = tasks.next().await? {
+        match result {
+            Err(e) => {
+                log::error!("Error: {:?}", e);
+            },
+
+            _ => ()
+        }     
+    }
 
     let already_visited = crawler_state.already_visited.read().await?;
     println!("{:?}", already_visited);
