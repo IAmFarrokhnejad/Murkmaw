@@ -93,13 +93,19 @@ fn crawl_element(elem: &Element, root_url: Url) -> Result<Vec<String>>
     Ok(links)
 }
 
-async fn find_links(url: String) -> Result<Vec<String>> 
+async fn find_links(url: Url, client: &Client) -> Result<Vec<String>> 
 {   
 
+    log::info!("Finding links in: {}", url.as_str());
 
+
+    let response = client.get(url.clone()).send().await?;
+
+    if response.status() != StatusCode::OK {
+        bail!("Invalid response from the page");
+    }
     //Pare HTML into a DOM object
-    let html = reqwest::get(url.clone())
-    .await?
+    let html = response
     .text()
     .await;
 
@@ -136,7 +142,9 @@ async fn find_links(url: String) -> Result<Vec<String>>
 }
 
 async fn crawl(crawler_state: crawlerStateRef, worker_n: i32) -> Result<()> {
-    
+    let client = Client::new();
+
+
     'crawler: loop {
 
         let mut link_queue = crawler_state.link_queue.write().await;
@@ -157,7 +165,7 @@ async fn crawl(crawler_state: crawlerStateRef, worker_n: i32) -> Result<()> {
         drop(link_queue);
 
         let url = Url::parse(&url_str)?;
-        let links = find_links(url.clone()).await?;
+        let links = find_links(url, &client).await?;
 
         let mut link_queue = crawler_state.link_queue.write().await;
         let mut already_visited = crawler_state.already_visited.write().await;
@@ -184,10 +192,13 @@ async fn crawl(crawler_state: crawlerStateRef, worker_n: i32) -> Result<()> {
 async fn output_status(crawlerState: crawlerStateRef) -> Result<()> {
     loop {
         let already_visited = crawler_state.already_visited.read().await;
+        log::info!("Number of links visited: {}", already_visited.len());
 
         for link in already_visited.iter() {
             log::info!("Already Visited: {}", link);
         }
+
+        tokio::time::sleep(Duration::from_secs(3)).await;
     }
 
     Ok(())
