@@ -1,4 +1,4 @@
-use std::{any, collections::{HashSet, VecDeque}, process, sync::{Arc, RwLock}};
+use std::{any, collections::{HashSet, VecDeque}, process, sync::{Arc, RwLock}, time::Duration};
 use anyhow::{anyhow, Result, bail};
 use clap::Parser;
 use html_parser::{Dom, Element, Node};
@@ -66,9 +66,16 @@ fn is_node(node: &Node) -> bool
     }
 }
 
+
+fn crawl_recursively(children: &[Node], root_url: Url) -> Result<Vec<String>> {
+    let elements = children.iter().filter_map(|e| crawl_element(e, root_url.clone()).ok());
+
+    links.flatten().collect()
+}
+
+
 fn crawl_element(elem: &Element, root_url: Url) -> Result<Vec<String>> 
 {
-
 
     let mut links: Vec<String> = Vec::new();
 
@@ -79,27 +86,16 @@ fn crawl_element(elem: &Element, root_url: Url) -> Result<Vec<String>>
         links.push(get_url(&href_attrib, root_url.clone())?.to_string());
     }
 
-
-    for node in elem.children().iter().filter(|c| is_node(c)) {
-        match node {
-            Node::Element(elem) => {
-                let mut children_links = crawl_element(elem, root_url.clone());
-                links.append(&mut children_links);
-            },
-            _ =>{}
-        }
-    }
-
-    Ok(links)
+    let all_links = crawl_recursively(&elem.children, root_url).links.extend(crawl_recursively(&elem.children, root_url)) // FIGURE THIS OUT
 }
 
-async fn find_links(url: Url, client: &Client) -> Result<Vec<String>> 
+async fn find_links(url: Url, client: &Client) -> Vec<String> 
 {   
 
     log::info!("Finding links in: {}", url.as_str());
 
 
-    let response = client.get(url.clone()).send().await?;
+    let response = client.get(url.clone()).timeout(Duration::from_millis(500)).send().await?;
 
     if response.status() != StatusCode::OK {
         bail!("Invalid response from the page");
@@ -159,10 +155,11 @@ async fn crawl(crawler_state: crawlerStateRef, worker_n: i32) -> Result<()> {
         if (already_visited.len() > crawler_state.max_links) {
             break 'crawler;
         }
-        drop(already_visited);
+        
 
         let url_str = link_queue.pop_back().ok_or_else(|| anyhow!("Queue is empty!"))?;
         drop(link_queue);
+        drop(already_visited);
 
         let url = Url::parse(&url_str)?;
         let links = find_links(url, &client).await?;
@@ -197,6 +194,8 @@ async fn output_status(crawlerState: crawlerStateRef) -> Result<()> {
         for link in already_visited.iter() {
             log::info!("Already Visited: {}", link);
         }
+
+        drop(already_visited);
 
         tokio::time::sleep(Duration::from_secs(3)).await;
     }
