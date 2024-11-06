@@ -35,6 +35,14 @@ fn main() {
 
 //Author: Morteza Farrokhnejad
 
+
+fn get_href(elem: &Element) -> Result<String> {
+    elem.attributes().get("href").ok_or_else(||anyhow!("Failed to find href from the link!"))?.as_ref().ok_or_else(||"Href does not have a value!").cloned()
+}
+
+//CREATE THIS FUNCTION LATER
+//fn request_html(url: Url) ->Dom
+
 //Turns URLs into full URLs
 fn get_url(path: &str, root_url: Url) -> Result <Url> {
 
@@ -53,8 +61,6 @@ fn get_url(path: &str, root_url: Url) -> Result <Url> {
             }
         }
     },
-    
-
 }
 
 fn is_node(node: &Node) -> bool
@@ -74,19 +80,29 @@ fn crawl_recursively(children: &[Node], root_url: Url) -> Result<Vec<String>> {
 }
 
 
-fn crawl_element(elem: &Element, root_url: Url) -> Result<Vec<String>> 
+fn crawl_element(elem: &Element, root_url: Url) -> <Vec<String>> 
 {
 
-    let mut links: Vec<String> = Vec::new();
+    let mut link: Option<String> = None;
 
     if elem.name == "a" 
     {
-        let href_attrib = elem.attributes().get("href").ok_or_else(||anyhow!("Failed to find href from the link!"))?.as_ref().ok_or_else(||"Href does not have a value!")?.clone();
+        if let Ok(href_attrib) = get_href(&elem) {
+            link = get_url(&href_attrib, root_url.clone()).ok().map(|url| url.to_sting());   
+        } else {
+            log::error!("Failed to locate the 'href' in the HTML tag!")
+        }
 
-        links.push(get_url(&href_attrib, root_url.clone())?.to_string());
+       
     }
 
-    let all_links = crawl_recursively(&elem.children, root_url).links.extend(crawl_recursively(&elem.children, root_url)) // FIGURE THIS OUT
+    let mut children_links = crawl_recursively(&elem.children, root_url);
+
+    if let Some(link) = link {
+        children_links.push(link);
+    }
+
+    children_links
 }
 
 async fn find_links(url: Url, client: &Client) -> Vec<String> 
@@ -98,7 +114,8 @@ async fn find_links(url: Url, client: &Client) -> Vec<String>
     let response = client.get(url.clone()).timeout(Duration::from_millis(500)).send().await?;
 
     if response.status() != StatusCode::OK {
-        bail!("Invalid response from the page");
+        log::error!("Invalid response from the page");
+        return Vec::new();
     }
     //Pare HTML into a DOM object
     let html = response
