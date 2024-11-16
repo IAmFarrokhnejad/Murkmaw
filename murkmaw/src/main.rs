@@ -1,185 +1,175 @@
-use std::{any, collections::{HashSet, VecDeque}, process, sync::{Arc, RwLock}, time::Duration};
-use anyhow::{anyhow, Result, bail};
+use anyhow::{anyhow, Context, Result};
 use clap::Parser;
-use html_parser::{Dom, Element, Node};
-use tokio::sync::RwLock;
-use futures::{stream::FutureUnordered, Future, StreamExt};
+use log2::*;
+use logger::spinner::Colour;
+use model::LinkGraph;
+use rayon::prelude::*;
+use reqwest::Client;
+use std::{collections::VecDeque, process, sync::Arc, time::Duration};
+use tokio::{fs, sync::RwLock, task::JoinSet};
 use url::Url;
-use html_parser::{Dom, Node, Element};
+
 mod crawler;
+mod image_utils;
+mod logger;
+mod model;
+use crate::{
+    crawler::{scrape_page, CrawlerState, LinkPath, ScrapeOption},
+    image_utils::{convert_links_to_images, download_images},
+};
 
-
-/// Simple program to greet a person
 #[derive(Parser, Debug)]
-#[command(version, about, long_about = None)]
-struct programArgs {
-    /// Name of the person to greet
+#[command(author, version, about, long_about = None)]
+struct ProgramArgs {
     #[arg(short, long)]
     starting_url: String,
+    #[arg(long, default_value_t = 100)]
+    max_links: u64,
+    #[arg(long, default_value_t = 100)]
+    max_images: u64,
+    #[arg(short, long, default_value_t = 4)]
+    n_worker_threads: u64,
+    #[arg(short, long, default_value_t = false)]
+    log_status: bool,
+    #[arg(short, long, default_value_t = String::from("images/"))]
+    img_save_dir: String,
+    #[arg(long, default_value_t = String::from("links.json"))]
+    links_json: String,
+}
+
+async fn output_status(crawler_state: &CrawlerState, total_links: u64) -> Result<()> {
+    let progress_bar = logger::progress_bar::ProgressBar::new(total_links);
+    progress_bar.message("Finding links");
+    'output: loop {
+        if crawler_state.link_graph.read().await.len() > crawler_state.max_links {
+            info!("All links found");
+            break 'output;
+        }
+
+        progress_bar.set_step(crawler_state.link_graph.read().await.len() as u64);
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    Ok(())
+}
+//Author: Morteza Farrokhnejad
+
+async fn crawl(crawler_state: &CrawlerState) -> Result<()> {
+    let client = Client::new();
+
+    'crawler: loop {
+        if crawler_state.link_graph.read().await.len() > crawler_state.max_links {
+            break 'crawler;
+        }
+
+        let LinkPath { parent, child } = crawler_state
+            .link_queue
+            .write()
+            .await
+            .pop_back()
+            .unwrap_or(Default::default());
+        let scrape_options = vec![ScrapeOption::Images, ScrapeOption::Titles];
+        let scrape_output = scrape_page(Url::parse(&child)?, &client, &scrape_options).await;
+
+        crawler_state
+            .link_graph
+            .write()
+            .await
+            .update(&child, &parent, &scrape_output.links, &scrape_output.images, &scrape_output.titles)
+            .context("failed to update link graph")?;
+    }
+
+    Ok(())
+}
+
+async fn serialize_links(links: &LinkGraph, destination: &str) -> Result<()> {
+    let json = serde_json::to_string(links)?;
+    fs::write(destination, json).await?;
+    Ok(())
+}
+
+fn new_crawler_state(starting_url: String, max_links: u64) -> Arc<CrawlerState> {
+    Arc::new(CrawlerState {
+        link_queue: RwLock::new(VecDeque::from([LinkPath {
+            child: starting_url,
+            ..Default::default()
+        }])),
+        link_graph: RwLock::new(Default::default()),
+        max_links: max_links as usize,
+    })
+}
+
+async fn try_main(args: ProgramArgs) -> Result<()> {
+    let crawler_state = new_crawler_state(args.starting_url, args.max_links);
+
+    let mut tasks = JoinSet::new();
+    for _ in 0..args.n_worker_threads {
+        let crawler_state = crawler_state.clone();
+        tasks.spawn(tokio::spawn(async move { crawl(&crawler_state).await }));
+    }
+
+    if args.log_status {
+        let crawler_state = crawler_state.clone();
+        tasks.spawn(tokio::spawn(async move {
+            output_status(&crawler_state, args.max_links).await
+        }));
+    }
+
+    while let Some(result) = tasks.join_next().await {
+        if let Err(e) = result {
+            error!("Error: {:?}", e);
+        }
+    }
+
+    let link_graph = crawler_state.link_graph.read().await;
+    let spinner = logger::spinner::Spinner::new();
+
+    spinner.status("[1/4] converting image links");
+    let image_metadata = convert_links_to_images(&link_graph);
+    spinner.print_above("  [1/4] converted image links", Colour::Green);
+
+    spinner.status("[2/4] downloading image metadata");
+    download_images(&image_metadata, &args.img_save_dir, args.max_images).await?;
+    spinner.print_above("  [2/4] downloaded image metadata", Colour::Green);
+
+    spinner.status("[3/4] creating image database");
+    let image_database = serde_json::to_string(&image_metadata)?;
+    fs::write(args.img_save_dir + "database.json", image_database).await?;
+    spinner.print_above("  [3/4] created image database", Colour::Green);
+
+    spinner.status(format!("[4/4] serializing links to {}", args.links_json));
+    serialize_links(&link_graph, &args.links_json).await?;
+    spinner.print_above(
+        format!("  [4/4] serializing links to {}", args.links_json),
+        Colour::Green,
+    );
+
+    Ok(())
 }
 
 fn main() {
-    let args = Args::parse();
+    let _log2 = log2::open("log.txt");
+    let args = ProgramArgs::parse();
+    pretty_print_args(&args);
 
-    for _ in 0..args.count {
-        println!("Hello {}!", args.name);
-    }
-}
-
-//Author: Morteza Farrokhnejad
-
-
-fn get_href(elem: &Element) -> Result<String> {
-    elem.attributes().get("href").ok_or_else(||anyhow!("Failed to find href from the link!"))?.as_ref().ok_or_else(||"Href does not have a value!").cloned()
-}
-
-
-async fn request_html(url: Url, client: &Client) ->Result<Dom> {
-    let response = client.get(url.clone()).timeout(Duration::from_secs(LINK_REQUEST_TIMEOUT_S)).send().await?;
-
-    if response.status() != StatusCode::OK {
-        bail!("Page returned invalid response!");
-    }
-
-    let html = response.text().await?;
-    Ok(Dom::parse(&html)?);
-}
-
-
-
-//Turns URLs into full URLs
-fn get_url(path: &str, root_url: Url) -> Result <Url> {
-
-    if Ok(url) = Url::parse(&path) {
-        return Ok(url);
-    }
-
-    root_url.join(&path).ok().ok_or(anyhow!("Failed to join the relative path!"))
-
-    match Url::parse(&path) {
-        Ok(url) => Ok(url),
-        _ => {
-            match root_url.join(path) {
-                Ok(url) => Ok(url),
-                _ => bail!("Failed to join the relative path!")
-            }
-        }
-    },
-}
-
-fn is_node(node: &Node) -> bool
-{
-    match node {
-        Node::Element(..) => true,
-        _ => false
-        
-    }
-}
-
-
-fn crawl_recursively(children: &[Node], root_url: Url) -> Result<Vec<String>> {
-    let elements = children.iter().filter_map(|e| crawl_element(e, root_url.clone()));
-
-    let links = elements.map(|e| crawl_element(e, root_url.clone()));
-
-    links.flatten().collect()
-}
-
-
-fn crawl_element(elem: &Element, root_url: Url) -> <Vec<String>> 
-{
-
-    let mut link: Option<String> = None;
-
-    if elem.name == "a" 
-    {
-        if let Ok(href_attrib) = get_href(&elem) {
-            link = get_url(&href_attrib, root_url.clone()).ok().map(|url| url.to_string());   
-        } else {
-            log::error!("Failed to locate the 'href' in the HTML tag!")
-        }
-
-       
-    }
-
-    let mut children_links = crawl_recursively(&elem.children, root_url);
-
-    if let Some(link) = link {
-        children_links.push(link);
-    }
-
-    children_links
-}
-
-
-
-async fn output_status(crawlerState: crawlerStateRef) -> Result<()> {
-    loop {
-        let already_visited = crawler_state.already_visited.read().await;
-        log::info!("Number of links visited: {}", already_visited.len());
-
-        for link in already_visited.iter() {
-            log::info!("Already Visited: {}", link);
-        }
-
-        drop(already_visited);
-
-        tokio::time::sleep(Duration::from_secs(3)).await;
-    }
-
-    Ok(())
-}
-
-async fn try_main(args: programArgs) -> Result<()> 
-{
-    let mut crawler_state = crawlerState {
-        link_queue: RwLock::new(VecDeque::from([args.starting_url])),
-        already_visited: RwLock::new(Default::default()),
-        max_links: 1000,
-    };
-
-    let crawler_state = Arc::new(crawlerState);
-
-
-    let mut tasks = FutureUnordered::<Pin<Box<dyn Future<Output = Result<()>>>>>::new();
-    tasks.push(crawl(Box::pin(crawler_state.clone(), 1)));
-    tasks.push(crawl(Box::pin(crawler_state.clone(), 2)));
-    tasks.push(crawl(Box::pin(crawler_state.clone(), 3)));
-    tasks.push(crawl(Box::pin(crawler_state.clone(), 4)));
-    tasks.push(crawl(Box::pin(crawler_state.clone())));
-
-    crawl(crawler_state.clone()).await?;
-
-    while let Some(result) = tasks.next().await? {
-        match result {
-            Err(e) => {
-                log::error!("Error: {:?}", e);
-            },
-
-            _ => ()
-        }     
-    }
-
-    let already_visited = crawler_state.already_visited.read().await?;
-    println!("{:?}", already_visited);
-    Ok(())
-}
-
-#[tokio::main]
-async fn main()
-{
-    env_logger::init();
-
-    let args = programArgs::parse();
-
-    match try_main(args).await
-    {
+    match try_main(args).await {
         Ok(_) => {
-            log::info!("Done!");
-        },
-        Err(e) =>{
-            log::error!("An error occured: {:?}", e);
+            info!("Finished!");
+        }
+        Err(e) => {
+            error!("Error: {:?}", e);
             process::exit(-1);
-        }     
+        }
     }
+}
+
+fn pretty_print_args(args: &ProgramArgs) {
+    println!("{}", console::style("CRAWLER INPUT ARGUMENTS").white().on_black());
+    println!("  {} {}", console::Emoji("🌐", ""), console::style(&args.starting_url).bold().cyan());
+    println!("  {} {}", console::Emoji("🔗", ""), console::style(&args.max_links).bold().cyan());
+    println!("  {} {}", console::Emoji("🖼️", ""), console::style(&args.max_images).bold().cyan());
+    println!("  {} {}", console::Emoji("⚒️", ""), console::style(&args.n_worker_threads).bold().cyan());
+    println!("  {} {}", console::Emoji("❔", ""), console::style(args.log_status).bold().cyan());
+    println!("  {} {}", console::Emoji("📁", ""), console::style(&args.img_save_dir).bold().cyan());
+    println!("  {} {}", console::Emoji("📁", ""), console::style(&args.links_json).bold().cyan());
+    println!();
 }

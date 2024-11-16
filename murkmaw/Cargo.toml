@@ -1,15 +1,23 @@
 [package]
 name = "murkmaw"
-version = "0.1.0"
-edition = "2021"
+version = "1.0.0"
+edition = "2024"
 
 [dependencies]
 anyhow = "1.0.70"
 clap = { version = "4.4.5", features = ["derive"] }
 env_logger = "0.10.1"  
-future = "0.3.21"  
+futures = "0.3.21"  
 html_parser = "0.7.1"
 log = "0.4.20" 
-reqwest = { version = "0.11.21", features = ["json"] }  
+reqwest = { version = "0.11.21", features = ["json", "stream"] }  
 tokio = { version = "1.32.0", features = ["full"] }   
 url = "2.5.0"  
+scraper = "0.17.1"
+serde_json = "1.0.107"
+serde = { version = "1.0.188", features = ["derive"] }
+uuid = { version = "1.4.1", features = ["v4", "fast-rng"] }
+tokio-stream = "0.1.14"
+indicatif = "0.17.8"
+log2 = "0.1.10"
+console = "0.15.8"
