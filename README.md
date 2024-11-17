@@ -1,4 +1,6 @@
 # Murkmaw
  
-A web crawler using Rust.
-todo: use the new libraries before proceeding further. 
+## A web crawler using Rust.
+### todo: 
+- Review the code.
+- Write this readme. 
