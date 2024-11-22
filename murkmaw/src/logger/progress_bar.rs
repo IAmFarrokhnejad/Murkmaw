@@ -4,13 +4,14 @@ pub struct ProgressBar {
     bar: indicatif::ProgressBar,
 }
 //Author: Morteza Farrokhnejad
+
 impl ProgressBar {
     pub fn new(total_steps: u64) -> Self {
         let bar = indicatif::ProgressBar::new(total_steps);
 
         bar.set_style(
             indicatif::ProgressStyle::with_template(
-                "{msg}\n[{elapsed}] {bar:40.white} {pos:>7}/{len:7}",
+                "{msg}\n[{elapsed}] {bar:40.cyan/white} {pos:>7}/{len:7}",
             )
             .unwrap(),
         );

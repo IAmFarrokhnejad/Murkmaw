@@ -7,8 +7,12 @@ pub struct Spinner {
 
 pub enum Colour {
     Green,
+    Red,
+    Blue,
+    Yellow,
 }
 //Author: Morteza Farrokhnejad
+
 impl Spinner {
     pub fn new() -> Self {
         let spinner = indicatif::ProgressBar::new_spinner();
@@ -36,5 +40,8 @@ fn get_coloured_message<T: AsRef<str> + Display>(
 ) -> console::StyledObject<T> {
     match colour {
         Colour::Green => console::style(msg).green(),
+        Colour::Red => console::style(msg).red(),
+        Colour::Blue => console::style(msg).blue(),
+        Colour::Yellow => console::style(msg).yellow(),
     }
 }
